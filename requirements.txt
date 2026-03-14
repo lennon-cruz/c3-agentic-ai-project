@@ -1,0 +1,21 @@
+# UdaPlay - AI Game Research Agent
+# Python 3.11+
+
+# Vector DB (Part 1 - RAG)
+chromadb>=0.4.22
+
+# LLM & API clients
+openai>=1.12.0
+
+# Web search (Part 2 - agent tools)
+tavily-python>=0.3.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Data validation & types
+pydantic>=2.5.0
+typing_extensions>=4.9.0
+
+# Document loading (lib/loaders)
+pdfplumber>=0.10.0
