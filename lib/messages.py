@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Union, List, Dict, Literal
 
 from lib.tooling import ToolCall
@@ -39,6 +39,13 @@ class AIMessage(BaseMessage):
     tool_calls: Optional[List[ToolCall]] = None
     token_usage: Optional[TokenUsage] = None
 
+class RetrievalEvaluation(BaseModel):
+    useful: bool = Field(
+        description="True if the retrieved documents are sufficient to answer the question"
+        )
+    description: str = Field(
+        description="Explanation of why documents are or aren't sufficient"
+        )
 
 AnyMessage = Union[
     SystemMessage,
