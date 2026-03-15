@@ -3,6 +3,7 @@ Dashboard logging: schema, serialize, and append agent runs and eval data to JSO
 Single source of truth for log format; used by the notebook; dashboard reads the files.
 """
 
+import ast
 import json
 import uuid
 from pathlib import Path
@@ -12,15 +13,17 @@ from typing import Any, Dict, List, Optional
 # Optional imports for extracting from Run/messages; only needed when logging from run object
 try:
     from lib.state_machine import Run
-    from lib.messages import AIMessage
+    from lib.messages import AIMessage, ToolMessage
 except ImportError:
     Run = None  # type: ignore
     AIMessage = None  # type: ignore
+    ToolMessage = None  # type: ignore
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 AGENT_RUNS_FILE = LOGS_DIR / "agent_runs.jsonl"
 EVAL_CASES_FILE = LOGS_DIR / "eval_cases.jsonl"
 EVAL_SUMMARIES_FILE = LOGS_DIR / "eval_summaries.jsonl"
+MEMORY_EVENTS_FILE = LOGS_DIR / "memory_events.jsonl"
 
 # Max query length to store
 QUERY_TRUNCATE_LEN = 200
@@ -64,6 +67,106 @@ def _run_execution_time_sec(run: "Run") -> Optional[float]:
     if run is None or not run.end_timestamp or not run.start_timestamp:
         return None
     return (run.end_timestamp - run.start_timestamp).total_seconds()
+
+
+def _parse_tool_arguments(raw_arguments: str) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(raw_arguments)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _parse_tool_message_content(raw_content: str) -> Any:
+    if not raw_content:
+        return None
+    try:
+        decoded = json.loads(raw_content)
+    except Exception:
+        decoded = raw_content
+
+    if isinstance(decoded, str):
+        try:
+            return ast.literal_eval(decoded)
+        except Exception:
+            return decoded
+    return decoded
+
+
+def _memory_events_from_messages(
+    messages: List[Any],
+    *,
+    run_id: str,
+    session_id: str,
+    source: str,
+    timestamp: str,
+    benchmark_run_id: Optional[str] = None,
+    case_id: Optional[str] = None,
+    prompt_version: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    tool_results: Dict[str, Any] = {}
+
+    if ToolMessage is not None:
+        for message in messages:
+            if isinstance(message, ToolMessage):
+                tool_results[message.tool_call_id] = _parse_tool_message_content(message.content)
+
+    if AIMessage is None:
+        return events
+
+    for message in messages:
+        if not isinstance(message, AIMessage) or not message.tool_calls:
+            continue
+
+        for tool_call in message.tool_calls:
+            tool_name = getattr(tool_call.function, "name", "")
+            if tool_name not in {"retrieve_memory", "store_memory"}:
+                continue
+
+            arguments = _parse_tool_arguments(getattr(tool_call.function, "arguments", "{}"))
+            event: Dict[str, Any] = {
+                "timestamp": timestamp,
+                "run_id": run_id,
+                "session_id": session_id,
+                "source": source,
+                "event_type": "retrieve" if tool_name == "retrieve_memory" else "store",
+                "tool_name": tool_name,
+                "tool_call_id": tool_call.id,
+            }
+            if benchmark_run_id is not None:
+                event["benchmark_run_id"] = benchmark_run_id
+            if case_id is not None:
+                event["case_id"] = case_id
+            if prompt_version is not None:
+                event["prompt_version"] = prompt_version
+
+            if tool_name == "retrieve_memory":
+                event["question"] = arguments.get("question", "")
+                event["limit"] = arguments.get("limit")
+                tool_result = tool_results.get(tool_call.id)
+                if isinstance(tool_result, dict):
+                    fragments = tool_result.get("fragments") or []
+                    event["retrieved_fragment_count"] = len(fragments) if isinstance(fragments, list) else 0
+                    event["retrieved_fragments"] = fragments if isinstance(fragments, list) else []
+                else:
+                    event["retrieved_fragment_count"] = 0
+                    event["retrieved_fragments"] = []
+            else:
+                event["fragment_content"] = arguments.get("content", "")
+                event["namespace"] = arguments.get("namespace", "default")
+                tool_result = tool_results.get(tool_call.id)
+                if isinstance(tool_result, dict) and "success" in tool_result:
+                    event["success"] = bool(tool_result.get("success"))
+
+            events.append(event)
+
+    return events
+
+
+def log_memory_event(record: Dict[str, Any]) -> None:
+    """Append one memory event record to logs/memory_events.jsonl."""
+    _append_jsonl(MEMORY_EVENTS_FILE, record)
 
 
 def log_agent_run(
@@ -147,6 +250,18 @@ def log_agent_run_from_run(
         case_id=case_id,
         prompt_version=prompt_version,
     )
+
+    for event in _memory_events_from_messages(
+        messages,
+        run_id=run.run_id,
+        session_id=session_id,
+        source=source,
+        timestamp=ts,
+        benchmark_run_id=benchmark_run_id,
+        case_id=case_id,
+        prompt_version=prompt_version,
+    ):
+        log_memory_event(event)
 
 
 def log_eval_case(
