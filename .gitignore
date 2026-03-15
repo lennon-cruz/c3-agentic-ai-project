@@ -47,7 +47,10 @@ ENV/
 
 # ChromaDB / vector DB data (if persisted locally)
 chroma/
+chromadb/
 *.db
+*.sqlite3
+*.sqlite3-*
 
 # Testing / coverage
 .pytest_cache/
