@@ -1,7 +1,7 @@
 """
 UdaPlay Agent Dashboard — metrics and evaluation logs.
 Run: streamlit run dashboard.py
-Reads from logs/agent_runs.jsonl, logs/eval_cases.jsonl, logs/eval_summaries.jsonl.
+Reads from logs/agent_runs.jsonl, logs/eval_cases.jsonl, logs/eval_summaries.jsonl, logs/memory_events.jsonl.
 """
 
 import json
@@ -14,6 +14,7 @@ LOGS_DIR = Path(__file__).resolve().parent / "logs"
 AGENT_RUNS_FILE = LOGS_DIR / "agent_runs.jsonl"
 EVAL_CASES_FILE = LOGS_DIR / "eval_cases.jsonl"
 EVAL_SUMMARIES_FILE = LOGS_DIR / "eval_summaries.jsonl"
+MEMORY_EVENTS_FILE = LOGS_DIR / "memory_events.jsonl"
 
 
 def load_jsonl(path: Path):
@@ -211,6 +212,107 @@ def page_evaluations(eval_summaries, eval_cases):
             st.write("**Feedback:**", row.get("feedback", ""))
 
 
+def page_memory_metrics(memory_events):
+    st.header("Memory Metrics")
+    if not memory_events:
+        st.info(
+            "No memory events in logs yet. Rerun the notebook after the memory-aware logging changes so "
+            "`logs/memory_events.jsonl` is populated."
+        )
+        return
+
+    retrieve_events = [e for e in memory_events if e.get("event_type") == "retrieve"]
+    store_events = [e for e in memory_events if e.get("event_type") == "store"]
+    runs_with_retrieval = len({e.get("run_id") for e in retrieve_events if e.get("run_id")})
+    runs_with_store = len({e.get("run_id") for e in store_events if e.get("run_id")})
+    avg_retrievals = len(retrieve_events) / runs_with_retrieval if runs_with_retrieval else 0
+
+    st.caption(
+        "Proposed memory metrics: total LTM retrieval calls, runs with LTM retrieval, total saved fragments, "
+        "runs with LTM saves, and average retrieval calls per memory-using run."
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("LTM retrieval calls", len(retrieve_events))
+    with c2:
+        st.metric("Runs with retrieval", runs_with_retrieval)
+    with c3:
+        st.metric("Saved fragments", len(store_events))
+    with c4:
+        st.metric("Runs with saves", runs_with_store)
+    with c5:
+        st.metric("Avg retrievals / run", f"{avg_retrievals:.1f}")
+
+    if retrieve_events:
+        st.subheader("Retrieval activity by run")
+        retrieval_by_run = {}
+        for event in retrieve_events:
+            run_id = event.get("run_id", "")
+            if run_id not in retrieval_by_run:
+                retrieval_by_run[run_id] = {
+                    "run_id": run_id[:8],
+                    "session_id": event.get("session_id", ""),
+                    "source": event.get("source", ""),
+                    "benchmark_run_id": (event.get("benchmark_run_id") or "")[:8],
+                    "case_id": event.get("case_id", ""),
+                    "retrieval_calls": 0,
+                    "retrieved_fragments": 0,
+                }
+            retrieval_by_run[run_id]["retrieval_calls"] += 1
+            retrieval_by_run[run_id]["retrieved_fragments"] += event.get("retrieved_fragment_count") or 0
+
+        retrieval_rows = list(retrieval_by_run.values())
+        retrieval_rows.sort(key=lambda row: row["retrieval_calls"], reverse=True)
+        st.dataframe(retrieval_rows, use_container_width=True, hide_index=True)
+
+        fig = px.bar(
+            retrieval_rows,
+            x="run_id",
+            y="retrieval_calls",
+            title="LTM retrieval calls per run",
+            labels={"run_id": "Run", "retrieval_calls": "Retrieval calls"},
+            color="source",
+        )
+        fig.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=280)
+        st.plotly_chart(fig, use_container_width=True)
+
+    if store_events:
+        st.subheader("Saved long-term memory fragments")
+        saved_rows = []
+        for event in store_events:
+            saved_rows.append({
+                "timestamp": (event.get("timestamp") or "")[:19].replace("T", " "),
+                "run_id": (event.get("run_id") or "")[:8],
+                "session_id": event.get("session_id", ""),
+                "source": event.get("source", ""),
+                "case_id": event.get("case_id", ""),
+                "namespace": event.get("namespace", "default"),
+                "fragment_content": event.get("fragment_content", ""),
+            })
+        st.dataframe(saved_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No store_memory calls have been logged yet.")
+
+    st.subheader("Memory event log")
+    memory_rows = []
+    for event in memory_events:
+        memory_rows.append({
+            "timestamp": (event.get("timestamp") or "")[:19].replace("T", " "),
+            "event_type": event.get("event_type", ""),
+            "run_id": (event.get("run_id") or "")[:8],
+            "session_id": event.get("session_id", ""),
+            "source": event.get("source", ""),
+            "case_id": event.get("case_id", ""),
+            "namespace": event.get("namespace", ""),
+            "retrieved_fragment_count": event.get("retrieved_fragment_count"),
+            "fragment_content": event.get("fragment_content", ""),
+            "question": event.get("question", ""),
+        })
+    memory_rows.sort(key=lambda row: row["timestamp"], reverse=True)
+    st.dataframe(memory_rows, use_container_width=True, hide_index=True)
+
+
 def main():
     st.set_page_config(page_title="UdaPlay Dashboard", layout="wide")
     st.title("UdaPlay Agent Dashboard")
@@ -218,10 +320,11 @@ def main():
     agent_runs = load_jsonl(AGENT_RUNS_FILE)
     eval_cases = load_jsonl(EVAL_CASES_FILE)
     eval_summaries = load_jsonl(EVAL_SUMMARIES_FILE)
+    memory_events = load_jsonl(MEMORY_EVENTS_FILE)
 
     page = st.sidebar.radio(
         "Page",
-        ["Overview", "Agent runs", "Evaluations"],
+        ["Overview", "Agent runs", "Evaluations", "Memory Metrics"],
         index=0,
     )
 
@@ -229,8 +332,10 @@ def main():
         page_overview(agent_runs, eval_summaries, eval_cases)
     elif page == "Agent runs":
         page_agent_runs(agent_runs)
-    else:
+    elif page == "Evaluations":
         page_evaluations(eval_summaries, eval_cases)
+    else:
+        page_memory_metrics(memory_events)
 
 
 if __name__ == "__main__":
