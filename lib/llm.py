@@ -1,4 +1,6 @@
+import os
 from typing import List, Optional, Dict, Any
+from dotenv import load_dotenv
 from pydantic import BaseModel
 from openai import OpenAI
 from lib.messages import (
@@ -17,11 +19,36 @@ class LLM:
         model: str = "gpt-4o-mini",
         temperature: float = 0.0,
         tools: Optional[List[Tool]] = None,
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
     ):
+        # Resolve configuration from environment when not provided explicitly
+        load_dotenv(".env")
+
+        resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
+        resolved_base_url = base_url or os.getenv("BASE_URL") or "https://api.openai.com/v1"
+
+        if not resolved_api_key:
+            raise ValueError(
+                "LLM api_key is not set. Provide api_key explicitly or set OPENAI_API_KEY in the environment."
+            )
+
+        # Basic sanity checks to catch common misconfigurations early
+        if "vocareum.com" in resolved_base_url and not resolved_api_key.startswith("voc-"):
+            raise ValueError(
+                "Configured BASE_URL points to Vocareum but the provided OPENAI_API_KEY does not look "
+                "like a Vocareum key (expected to start with 'voc-')."
+            )
+
+        if "api.openai.com" in resolved_base_url and resolved_api_key.startswith("voc-"):
+            raise ValueError(
+                "Using a Vocareum-style key (starts with 'voc-') with the standard OpenAI base URL "
+                "'https://api.openai.com/v1'. Check BASE_URL and OPENAI_API_KEY configuration."
+            )
+
         self.model = model
         self.temperature = temperature
-        self.client = OpenAI(api_key=api_key) if api_key else OpenAI()
+        self.client = OpenAI(api_key=resolved_api_key, base_url=resolved_base_url)
         self.tools: Dict[str, Tool] = {
             tool.name: tool for tool in (tools or [])
         }

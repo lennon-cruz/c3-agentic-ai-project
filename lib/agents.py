@@ -61,7 +61,7 @@ class Agent:
         llm = LLM(
             model=self.model_name,
             temperature=self.temperature,
-            tools=self.tools
+            tools=self.tools,
         )
 
         response = llm.invoke(state["messages"])
