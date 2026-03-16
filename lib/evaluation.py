@@ -86,8 +86,8 @@ class AgentEvaluator:
         
         Rate the response on:
         1. Task completion: Did it fully answer the query?
-        2. Format correctness: Is the format appropriate?
-        3. Instruction following: Did it follow implicit instructions?
+        2. Format correctness: Is the format appropriate, including a clear Sources line when the answer relies on retrieved or web evidence?
+        3. Instruction following: Did it follow implicit instructions, especially using named citations instead of vague phrases like "verified with web search"?
         
         Provide your evaluation with a brief explanation.
         """
