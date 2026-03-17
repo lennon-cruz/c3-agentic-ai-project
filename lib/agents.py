@@ -97,9 +97,17 @@ class Agent:
             # Find the matching tool
             tool = next((t for t in self.tools if t.name == function_name), None)
             if tool:
-                result = str(tool(**function_args))
+                result = tool(**function_args)
+                if isinstance(result, str):
+                    content = result
+                elif hasattr(result, "model_dump_json"):
+                    content = result.model_dump_json()
+                elif hasattr(result, "model_dump"):
+                    content = json.dumps(result.model_dump(), ensure_ascii=False)
+                else:
+                    content = json.dumps(result, ensure_ascii=False)
                 tool_message = ToolMessage(
-                    content=json.dumps(result), 
+                    content=content,
                     tool_call_id=tool_call_id, 
                     name=function_name, 
                 )
